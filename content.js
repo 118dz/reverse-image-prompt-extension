@@ -8,7 +8,6 @@
   let lastImageRect = null;
   let visualProgress = 0;
   let progressTimer = null;
-  let rewriteProgressTimer = null;
   let progressStartTime = 0;
   let dragState = null;
 
@@ -166,32 +165,20 @@
     const root = ensureShadow();
     root.querySelector(".ript-panel")?.remove();
 
-    const jsonText = formatJsonText(result?.json || "{}");
+    const promptText = String(result?.prompt || result?.raw || "").trim();
 
     const panel = createShell(point, `
       <section class="ript-card ript-result-card">
         <div class="ript-head ript-drag-handle">
           <header class="ript-result-header">
             <h2>风格提示词</h2>
-            <p>可迁移的画面韵味</p>
+            <p>只保留可迁移的画面韵味</p>
           </header>
           <button class="ript-close" type="button" aria-label="关闭">×</button>
         </div>
-        <textarea class="ript-result-text" data-ript-active-text spellcheck="false">${escapeHtml(jsonText)}</textarea>
-        <div class="ript-rewrite">
-          <input data-ript-rewrite-input type="text" placeholder="输入调整目标，例如：修改主题、元素、文字等。">
-          <button class="ript-secondary" type="button" data-ript-rewrite>同步调整</button>
-        </div>
-        <div class="ript-rewrite-progress" data-ript-rewrite-progress hidden>
-          <span class="ript-rewrite-progress-fill" data-ript-rewrite-progress-fill style="width: 0%"></span>
-        </div>
-        <p class="ript-rewrite-status" data-ript-rewrite-status></p>
+        <textarea class="ript-result-text" data-ript-active-text spellcheck="false">${escapeHtml(promptText)}</textarea>
         <footer class="ript-result-footer">
-          <button class="ript-copy-main" type="button" data-ript-copy-prompt-cn>复制中文模板</button>
-          <div class="ript-copy-row">
-            <button class="ript-copy-sub" type="button" data-ript-copy-style-cn>风格层</button>
-            <button class="ript-copy-sub" type="button" data-ript-copy-json>JSON</button>
-          </div>
+          <button class="ript-copy-main" type="button" data-ript-copy-prompt>复制风格提示词</button>
         </footer>
       </section>
     `);
@@ -220,7 +207,6 @@
 
   function dismissPanel(root) {
     stopVisualProgress();
-    stopRewriteProgress();
     dragState = null;
 
     const panel = root.querySelector(".ript-panel");
@@ -274,31 +260,11 @@
     bindCopyButton({
       root,
       textarea,
-      selector: "[data-ript-copy-prompt-cn]",
-      getValue: () => getPromptFromJson(textarea.value, "cn") || textarea.value,
-      idleLabel: "复制中文提示词",
+      selector: "[data-ript-copy-prompt]",
+      getValue: () => textarea.value,
+      idleLabel: "复制风格提示词",
       doneLabel: "✓ 已复制"
     });
-
-    bindCopyButton({
-      root,
-      textarea,
-      selector: "[data-ript-copy-style-cn]",
-      getValue: () => getPromptFromJson(textarea.value, "style") || textarea.value,
-      idleLabel: "风格层",
-      doneLabel: "✓ 风格"
-    });
-
-    bindCopyButton({
-      root,
-      textarea,
-      selector: "[data-ript-copy-json]",
-      getValue: () => textarea.value,
-      idleLabel: "JSON",
-      doneLabel: "✓ JSON"
-    });
-
-    bindRewriteControls(root, textarea);
   }
 
   function bindCopyButton({ root, textarea, selector, getValue, idleLabel, doneLabel }) {
@@ -324,82 +290,6 @@
         }, 2200);
       }
     });
-  }
-
-  function getPromptFromJson(value, language) {
-    try {
-      const data = JSON.parse(value);
-      const prompt = data.generation_prompt || {};
-      if (language === "style") {
-        return prompt.style_prompt_cn || prompt.style_prompt_en || prompt.direct_prompt_cn || prompt.positive_prompt_cn || "";
-      }
-      return prompt.prompt_template_cn || prompt.style_prompt_cn || prompt.direct_prompt_cn || prompt.positive_prompt_cn || "";
-    } catch {
-      return "";
-    }
-  }
-
-  function bindRewriteControls(root, textarea) {
-    const input = root.querySelector("[data-ript-rewrite-input]");
-    const button = root.querySelector("[data-ript-rewrite]");
-    const status = root.querySelector("[data-ript-rewrite-status]");
-    if (!input || !button || !status || !textarea) return;
-
-    button.addEventListener("click", async () => {
-      const rewriteTarget = input.value.trim() || "";
-      if (!rewriteTarget) {
-        setRewriteStatus(status, "请输入调整目标。", true);
-        return;
-      }
-
-      button.disabled = true;
-      input.disabled = true;
-      textarea.disabled = true;
-      button.classList.add("is-loading");
-      button.textContent = "调整中";
-      setRewriteStatus(status, "正在同步调整 JSON 描述。", false);
-      startRewriteProgress(root);
-
-      let response;
-      try {
-        response = await chrome.runtime.sendMessage({
-          type: "RIPT_REWRITE_JSON_PROMPT",
-          currentJson: textarea.value,
-          rewriteTarget
-        });
-      } catch (error) {
-        button.disabled = false;
-        input.disabled = false;
-        textarea.disabled = false;
-        button.classList.remove("is-loading");
-        button.textContent = "同步调整";
-        finishRewriteProgress(root, "error");
-        setRewriteStatus(status, error?.message || "调整失败，请稍后重试。", true);
-        return;
-      }
-
-      button.disabled = false;
-      input.disabled = false;
-      textarea.disabled = false;
-      button.classList.remove("is-loading");
-      button.textContent = "同步调整";
-
-      if (!response?.ok) {
-        finishRewriteProgress(root, "error");
-        setRewriteStatus(status, response?.message || "调整失败，请稍后重试。", true);
-        return;
-      }
-
-      textarea.value = formatJsonText(response.json || textarea.value);
-      finishRewriteProgress(root, "ok");
-      setRewriteStatus(status, "已同步调整。", false);
-    });
-  }
-
-  function setRewriteStatus(status, message, isError) {
-    if (!status) return;
-    status.textContent = message;
-    status.dataset.state = isError ? "error" : "ok";
   }
 
   function showToast(root, message, isError = false) {
@@ -431,7 +321,7 @@
           root,
           elapsedSeconds >= 50
             ? `已等待 ${elapsedSeconds} 秒，超过预期；新版插件会自动中断，请确认扩展页已点“重新加载”。`
-            : `AI 正在生成 JSON，请稍候，已等待 ${elapsedSeconds} 秒`
+            : `AI 正在提炼风格提示词，请稍候，已等待 ${elapsedSeconds} 秒`
         );
         return;
       }
@@ -453,55 +343,6 @@
     if (progressTimer) {
       window.clearInterval(progressTimer);
       progressTimer = null;
-    }
-  }
-
-  function startRewriteProgress(root) {
-    stopRewriteProgress();
-
-    const track = root.querySelector("[data-ript-rewrite-progress]");
-    const fill = root.querySelector("[data-ript-rewrite-progress-fill]");
-    if (!track || !fill) return;
-
-    let progress = 8;
-    track.hidden = false;
-    fill.classList.remove("is-waiting", "is-error");
-    fill.style.width = `${progress}%`;
-
-    rewriteProgressTimer = window.setInterval(() => {
-      const step = progress < 46 ? 3.8 : progress < 72 ? 1.8 : 0.65;
-      progress = Math.min(90, progress + step);
-      fill.style.width = `${Math.round(progress)}%`;
-      if (progress >= 88) {
-        fill.classList.add("is-waiting");
-      }
-    }, 160);
-  }
-
-  function finishRewriteProgress(root, state) {
-    stopRewriteProgress();
-
-    const track = root.querySelector("[data-ript-rewrite-progress]");
-    const fill = root.querySelector("[data-ript-rewrite-progress-fill]");
-    if (!track || !fill) return;
-
-    fill.classList.remove("is-waiting", "is-error");
-    if (state === "error") {
-      fill.classList.add("is-error");
-    }
-    fill.style.width = "100%";
-
-    window.setTimeout(() => {
-      track.hidden = true;
-      fill.classList.remove("is-waiting", "is-error");
-      fill.style.width = "0%";
-    }, state === "error" ? 1200 : 650);
-  }
-
-  function stopRewriteProgress() {
-    if (rewriteProgressTimer) {
-      window.clearInterval(rewriteProgressTimer);
-      rewriteProgressTimer = null;
     }
   }
 
@@ -560,14 +401,6 @@
       });
     }
     return clampPoint(lastPoint);
-  }
-
-  function formatJsonText(value) {
-    try {
-      return JSON.stringify(JSON.parse(value), null, 2);
-    } catch {
-      return value;
-    }
   }
 
   function escapeHtml(value) {
@@ -805,7 +638,6 @@
       }
 
       .ript-input-field input:disabled,
-      .ript-rewrite input:disabled,
       .ript-result-text:disabled {
         cursor: wait;
         opacity: 0.64;
@@ -824,8 +656,7 @@
       }
 
       .ript-primary,
-      .ript-copy-main,
-      .ript-copy-sub {
+      .ript-copy-main {
         position: relative;
         display: inline-flex;
         align-items: center;
@@ -848,21 +679,18 @@
       }
 
       .ript-primary:hover,
-      .ript-copy-main:hover,
-      .ript-copy-sub:hover {
+      .ript-copy-main:hover {
         background: #9aff66;
         transform: translateY(-1px);
       }
 
-      .ript-primary:disabled,
-      .ript-secondary:disabled {
+      .ript-primary:disabled {
         cursor: wait;
         opacity: 0.72;
         transform: none;
       }
 
-      .ript-primary.is-loading::before,
-      .ript-secondary.is-loading::before {
+      .ript-primary.is-loading::before {
         content: "";
         width: 13px;
         height: 13px;
@@ -991,119 +819,9 @@
         -webkit-backdrop-filter: blur(22px) saturate(1.2);
       }
 
-      .ript-rewrite {
-        display: grid;
-        grid-template-columns: 1fr 92px;
-        gap: 8px;
-        padding: 0 20px 8px;
-      }
-
-      .ript-rewrite input {
-        min-height: 34px;
-        border: 1px solid rgba(255, 255, 255, 0.22);
-        border-radius: 999px;
-        padding: 0 10px;
-        color: #f8fafc;
-        background: transparent;
-        outline: none;
-        font-size: 12px;
-        transition: border-color 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
-      }
-
-      .ript-rewrite input:focus {
-        border-color: #7cff3a;
-        box-shadow: 0 0 0 3px rgba(124, 255, 58, 0.12);
-      }
-
-      .ript-rewrite-progress {
-        height: 8px;
-        margin: 0 20px 8px;
-        overflow: hidden;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.13);
-      }
-
-      .ript-rewrite-progress[hidden] {
-        display: none;
-      }
-
-      .ript-rewrite-progress-fill {
-        display: block;
-        height: 100%;
-        border-radius: inherit;
-        background: #7cff3a;
-        transition: width 220ms ease;
-      }
-
-      .ript-rewrite-progress-fill.is-waiting {
-        background: linear-gradient(90deg, rgba(124, 255, 58, 0.28), #7cff3a, rgba(124, 255, 58, 0.28));
-        background-size: 180% 100%;
-        animation: ript-waiting 1.15s linear infinite;
-      }
-
-      .ript-rewrite-progress-fill.is-error {
-        background: #fca5a5;
-      }
-
-      .ript-rewrite-status {
-        min-height: 16px;
-        margin: 0;
-        padding: 0 20px 8px;
-        color: #7cff3a;
-        font-size: 12px;
-        line-height: 1.5;
-      }
-
-      .ript-rewrite-status[data-state="error"] {
-        color: #fecaca;
-      }
-
       .ript-copy-main {
         width: 100%;
         min-height: 42px;
-      }
-
-      .ript-copy-row {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 8px;
-        margin-top: 8px;
-      }
-
-      .ript-copy-sub {
-        width: 100%;
-        min-height: 34px;
-        border-color: rgba(124, 255, 58, 0.72);
-        color: #7cff3a;
-        background: transparent;
-      }
-
-      .ript-copy-sub:hover {
-        color: #07110a;
-        background: #7cff3a;
-      }
-
-      .ript-secondary {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 7px;
-        min-height: 34px;
-        border: 1px solid rgba(124, 255, 58, 0.72);
-        border-color: rgba(124, 255, 58, 0.72);
-        border-radius: 999px;
-        color: #7cff3a;
-        background: transparent;
-        cursor: pointer;
-        font-size: 12px;
-        font-weight: 700;
-        transition: background 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease, transform 140ms ease;
-      }
-
-      .ript-secondary:hover {
-        color: #07110a;
-        background: #7cff3a;
-        transform: translateY(-1px);
       }
 
       .ript-toast {
@@ -1156,10 +874,6 @@
       }
 
       @media (max-width: 520px) {
-        .ript-rewrite {
-          grid-template-columns: 1fr;
-        }
-
         .ript-copy-main {
           min-height: 42px;
         }

@@ -60,12 +60,6 @@
             }
           },
           async sendMessage(message) {
-            if (message.type === "RIPT_REWRITE_JSON_PROMPT") {
-              return {
-                ok: true,
-                json: message.currentJson
-              };
-            }
             return { ok: true };
           }
         }
@@ -77,24 +71,15 @@
         }
       };
     </script>
-    <script src="../../content.js?v=2"></script>
+    <script src="../../content.js?v=3"></script>
     <script>
-      fetch("../results/kimi-style-transfer-result.json")
-        .then((response) => response.text())
-        .then((json) => {
-          window.dispatchRiptMessage({
-            type: "RIPT_SHOW_RESULT",
-            result: { json },
-            point: { x: window.innerWidth / 2, y: 160 }
-          });
-        })
-        .catch((error) => {
-          window.dispatchRiptMessage({
-            type: "RIPT_SHOW_ERROR",
-            message: error.message,
-            point: { x: window.innerWidth / 2, y: 160 }
-          });
-        });
+      window.dispatchRiptMessage({
+        type: "RIPT_SHOW_RESULT",
+        result: {
+          prompt: "极简几何人形，深海军蓝暗底，中轴对称构图，后方悬浮巨型红色圆环天体，青绿与暗红双色轮廓光，底部荧光透视网格，哑光磨砂材质，轻微空气颗粒，80年代复古科幻海报气质，孤独、仪式感、冷静而神秘，无具体文字与logo。"
+        },
+        point: { x: window.innerWidth / 2, y: 160 }
+      });
     </script>
   </body>
 </html>

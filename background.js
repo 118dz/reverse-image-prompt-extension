@@ -12,8 +12,7 @@ const CONNECTION_TEST_TIMEOUT_MS = 20000;
 const IMAGE_FETCH_TIMEOUT_MS = 20000;
 const IMAGE_ANALYSIS_TIMEOUT_MS = 45000;
 const IMAGE_ANALYSIS_WATCHDOG_MS = 50000;
-const ANALYSIS_MAX_TOKENS = 1200;
-const REWRITE_MAX_TOKENS = 1200;
+const ANALYSIS_MAX_TOKENS = 500;
 
 chrome.runtime.onInstalled.addListener(setupContextMenu);
 chrome.runtime.onStartup.addListener(setupContextMenu);
@@ -43,16 +42,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === "RIPT_REWRITE_JSON_PROMPT") {
-    handleJsonRewrite(message)
-      .then((response) => sendResponse(response))
-      .catch((error) => sendResponse({
-        ok: false,
-        message: normalizeError(error)
-      }));
-    return true;
-  }
-
   if (message?.type !== "RIPT_TEST_SAVE_BINDING") return false;
 
   handleBindingMessage(message, sender)
@@ -64,41 +53,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return true;
 });
-
-async function handleJsonRewrite(message) {
-  const settings = await chrome.storage.local.get([
-    STORAGE_KEYS.apiKey,
-    STORAGE_KEYS.apiUrl,
-    STORAGE_KEYS.model
-  ]);
-
-  const apiKey = settings[STORAGE_KEYS.apiKey];
-  const apiUrl = settings[STORAGE_KEYS.apiUrl];
-  const model = settings[STORAGE_KEYS.model] || DEFAULT_MODEL;
-  const currentJson = String(message.currentJson || "").trim();
-  const rewriteTarget = String(message.rewriteTarget || "").trim();
-
-  if (!apiKey || !apiUrl || !model) {
-    throw new Error("请先绑定 API URL、API Key 和模型名称。");
-  }
-
-  if (!currentJson || !rewriteTarget) {
-    throw new Error("当前 JSON 和调整目标都不能为空。");
-  }
-
-  const rewritten = await rewriteJsonPrompt({
-    apiKey,
-    apiUrl,
-    model,
-    currentJson,
-    rewriteTarget
-  });
-
-  return {
-    ok: true,
-    json: rewritten
-  };
-}
 
 async function startReverseImageFlow({ tabId, srcUrl, point }) {
   const settings = await chrome.storage.local.get([
@@ -351,75 +305,6 @@ async function reverseImagePrompt({ apiKey, apiUrl, model, imageDataUrl }) {
   });
 }
 
-async function rewriteJsonPrompt({ apiKey, apiUrl, model, currentJson, rewriteTarget }) {
-  const endpoint = normalizeApiUrl(apiUrl);
-  const mode = detectApiMode(endpoint);
-
-  if (mode === "chat") {
-    return rewriteJsonWithChatCompletions({
-      apiKey,
-      endpoint,
-      model,
-      currentJson,
-      rewriteTarget
-    });
-  }
-
-  return rewriteJsonWithResponses({
-    apiKey,
-    endpoint,
-    model,
-    currentJson,
-    rewriteTarget
-  });
-}
-
-async function rewriteJsonWithResponses({ apiKey, endpoint, model, currentJson, rewriteTarget }) {
-  const response = await fetchWithTimeout(endpoint, {
-    method: "POST",
-    headers: getHeaders(apiKey),
-    body: JSON.stringify({
-      model,
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: getRewritePrompt({ currentJson, rewriteTarget })
-            }
-          ]
-        }
-      ],
-      max_output_tokens: REWRITE_MAX_TOKENS
-    })
-  }, IMAGE_ANALYSIS_TIMEOUT_MS);
-
-  const payload = await parseJsonResponse(response);
-  return cleanupJsonText(extractResponsesText(payload));
-}
-
-async function rewriteJsonWithChatCompletions({ apiKey, endpoint, model, currentJson, rewriteTarget }) {
-  const response = await fetchWithTimeout(endpoint, {
-    method: "POST",
-    headers: getHeaders(apiKey),
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: "user",
-          content: getRewritePrompt({ currentJson, rewriteTarget })
-        }
-      ],
-      ...getModelSpecificOptions(model),
-      max_tokens: REWRITE_MAX_TOKENS
-    })
-  }, IMAGE_ANALYSIS_TIMEOUT_MS);
-
-  const payload = await parseJsonResponse(response);
-  return cleanupJsonText(payload?.choices?.[0]?.message?.content || "");
-}
-
 async function testResponses({ apiKey, endpoint, model }) {
   const response = await fetchWithTimeout(endpoint, {
     method: "POST",
@@ -574,7 +459,7 @@ async function callChatCompletions({ apiKey, endpoint, model, imageDataUrl }) {
       messages: [
         {
           role: "system",
-          content: "你是图像风格提取和迁移提示词工程师。只输出合法 JSON 对象，不要解释。"
+          content: "你是图像风格提示词提炼助手。只输出一段中文风格提示词，不要 JSON，不要解释。"
         },
         {
           role: "user",
@@ -666,66 +551,25 @@ async function parseJsonResponse(response) {
 
 function getPromptText() {
   return [
-    "你是图像风格提取和迁移提示词工程师。只做一件事：把参考图压缩成可直接用于生图的风格迁移模板。",
-    "目标不是 100% 复刻原图，而是提取可复用的风格、韵味、构图语言和审美配方。",
-    "prompt_template_cn 必须是用户可直接复制的完整正向提示词，并且必须以“【替换为你要生成的主体/场景/动作】”开头。",
-    "用户真正要填的内容只放在这个占位符里；占位符后面接参考图提炼出的构图、光影、色彩、材质、情绪和画面节奏。",
+    "观察参考图，只输出一段中文风格提示词，供用户粘贴到其他生图模型里复用这张图的画面韵味。",
+    "不要生成 JSON、Markdown、标题、分点、解释、负面提示词或参数建议。",
+    "不要写“替换为主体”这类占位符；用户会自己在前面加主体，你只负责风格层。",
+    "不要 100% 复刻原图，不要写具体 logo、品牌名、电影片名、明星名、准确文字或演职员表。",
+    "如果原图含文字/logo，只抽象为“预留文字区”“大面积留白”“标识留白”等版面描述。",
+    "提示词只描述可迁移风格：构图、光影、色彩比例、材质颗粒、时代气质、情绪氛围、画面节奏。",
     "如果图片信息不足，请写“无法确认”，不要编造。",
-    "不要在 prompt_template_cn 或 style_prompt_cn 中写具体 logo、品牌名、电影片名、明星名、准确文字、标题或演职员表。",
-    "如果原图含文字/logo，只描述“预留文字区”“预留标识位置”“大面积留白”等布局，不生成具体文字。",
-    "输出要求：只输出合法 JSON 对象，不要 Markdown，不要解释；只输出中文，避免冗长。",
-    "长度要求：数组最多 4 项；prompt_template_cn 控制在 220 字以内；style_prompt_cn 控制在 140 字以内；必须完整闭合 JSON，不能截断。",
-    "JSON 必须使用下面的固定结构：",
-    JSON.stringify({
-      style_summary: {
-        transferable_style: "一句话说明这张图可迁移的风格和韵味",
-        must_keep: ["换主体也要保留的关键风格控制点"],
-        can_change: ["可以替换的新主体、场景、动作或道具"],
-        must_avoid: ["会破坏这种韵味的偏差"]
-      },
-      generation_prompt: {
-        target_input_slot_cn: "在 prompt_template_cn 开头的占位符里填写新主体、新场景、新动作，例如：一位撑伞的年轻女子站在雨夜街角",
-        prompt_template_cn: "【替换为你要生成的主体/场景/动作】，加上从参考图提炼出的构图、光影、色彩、材质、情绪和画面节奏，不含具体文字/logo/品牌名",
-        style_prompt_cn: "只保留参考图风格层的中文提示词，不含主体填空位",
-        negative_prompt_cn: "中文负面提示词",
-        usage_note: "一句话说明如何替换主体，以及哪些文字/logo建议后期添加",
-        parameter_suggestions: {
-          aspect_ratio: "建议画幅比例",
-          style_strength: "风格强度建议",
-          reference_image_weight: "参考图权重建议"
-        }
-      }
-    }, null, 2)
+    "长度控制在 120-180 个中文字符，必须是一整段，可直接复制。"
   ].join("\n");
 }
 
-function getRewritePrompt({ currentJson, rewriteTarget }) {
-  return [
-    "你是专业的图像风格迁移 JSON 提示词重写助手。",
-    "任务：根据用户的调整目标，重写下面的风格迁移分析 JSON。",
-    "要求：",
-    "1. 只输出合法 JSON，不要解释，不要 Markdown。",
-    "2. 必须保持原 JSON 的字段结构、层级和详细程度。",
-    "3. 不要做简单替换，要让主体、动作、服装、姿势、道具、场景、光线、氛围、构图、负面提示词和参数建议通篇同步。",
-    "4. 如果用户要求保留构图或风格，必须把该要求落实到 style_summary 和 generation_prompt。",
-    "5. 如果用户修改主体或场景，必须同步更新 must_keep、must_avoid、prompt_template_cn、style_prompt_cn 和 negative_prompt_cn。",
-    "6. prompt_template 必须保留明确的主体填空位；style_prompt 和 prompt_template 仍然不能包含具体 logo、品牌名、电影片名或准确文字；这些只放在 usage_note。",
-    `用户调整目标：${rewriteTarget}`,
-    "当前 JSON：",
-    currentJson
-  ].join("\n");
-}
-
-function cleanupJsonText(text) {
+function cleanupPromptText(text) {
   const trimmed = String(text || "").trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const unfenced = (fenced?.[1] || trimmed).trim();
-  const firstBrace = unfenced.indexOf("{");
-  const lastBrace = unfenced.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    return unfenced.slice(firstBrace, lastBrace + 1).trim();
-  }
-  return unfenced;
+  return (fenced?.[1] || trimmed)
+    .replace(/^【?风格提示词】?[：:]\s*/i, "")
+    .replace(/^风格提示词[：:]\s*/i, "")
+    .replace(/^["'“”]+|["'“”]+$/g, "")
+    .trim();
 }
 
 function extractResponsesText(payload) {
@@ -748,26 +592,15 @@ function parseAIResponse(text) {
     throw new Error("AI 没有返回可解析内容。");
   }
 
+  const prompt = cleanupPromptText(text);
+  if (!prompt) {
+    throw new Error("AI 没有返回可用的风格提示词。");
+  }
+
   return {
-    zh: "",
-    en: "",
-    json: cleanupJsonText(extractSection(text, "JSON 格式的关键词标签") || text || "{}"),
+    prompt,
     raw: text
   };
-}
-
-function extractSection(text, startTitle, endTitle) {
-  const escapedStart = escapeRegExp(`【${startTitle}】`);
-  const escapedEnd = endTitle ? escapeRegExp(`【${endTitle}】`) : "$";
-  const pattern = endTitle
-    ? new RegExp(`${escapedStart}\\s*([\\s\\S]*?)\\s*${escapedEnd}`, "i")
-    : new RegExp(`${escapedStart}\\s*([\\s\\S]*)`, "i");
-  const match = text.match(pattern);
-  return match?.[1]?.trim() || "";
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function normalizeError(error) {
