@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>图片反推提示词</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body class="ript-popup-body">
+    <main class="ript-popup">
+      <header class="ript-popup__header">
+        <div class="ript-popup__title-row">
+          <h1>图片反推提示词</h1>
+          <span class="ript-popup__version">v0.1.1</span>
+        </div>
+        <p>绑定 Kimi API 后，右键网页图片生成可迁移风格模板和提示词。</p>
+      </header>
+
+      <label class="ript-popup__field">
+        <span>API URL</span>
+        <input id="apiUrl" type="url" autocomplete="off" placeholder="https://api.moonshot.cn/v1/chat/completions" />
+      </label>
+
+      <label class="ript-popup__field">
+        <span>API Key</span>
+        <input id="apiKey" type="password" autocomplete="off" placeholder="sk-..." />
+      </label>
+
+      <label class="ript-popup__field">
+        <span>视觉模型名称</span>
+        <input id="modelName" type="text" autocomplete="off" placeholder="例如：kimi-k2.6" />
+      </label>
+
+      <div class="ript-popup__actions">
+        <button id="saveKey" type="button">检测并绑定</button>
+        <button id="clearKey" type="button">清除</button>
+      </div>
+
+      <p id="status" class="ript-popup__status" role="status"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

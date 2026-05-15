@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Replication Sample Card</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1024px;
+        height: 1365px;
+        overflow: hidden;
+        background: #05070b;
+      }
+
+      .poster {
+        position: relative;
+        width: 1024px;
+        height: 1365px;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 50% 21%, rgba(255, 63, 43, 0.95) 0 105px, rgba(121, 14, 23, 0.55) 106px 176px, transparent 177px),
+          linear-gradient(180deg, #070914 0%, #141628 42%, #090b12 100%);
+        color: #fff;
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      }
+
+      .poster::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(115deg, transparent 0 58%, rgba(35, 255, 224, 0.18) 58.2% 59.2%, transparent 59.4%),
+          radial-gradient(circle at 20% 78%, rgba(24, 200, 189, 0.18), transparent 28%),
+          radial-gradient(circle at 88% 64%, rgba(255, 71, 56, 0.22), transparent 24%);
+        mix-blend-mode: screen;
+      }
+
+      .poster::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        opacity: 0.17;
+        background-image:
+          repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.11) 0 1px, transparent 1px 5px),
+          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.07) 0 1px, transparent 1px 7px);
+      }
+
+      .grid {
+        position: absolute;
+        left: 50%;
+        bottom: 108px;
+        width: 960px;
+        height: 360px;
+        transform: translateX(-50%) perspective(620px) rotateX(64deg);
+        transform-origin: center bottom;
+        background:
+          linear-gradient(rgba(39, 252, 224, 0.3) 2px, transparent 2px),
+          linear-gradient(90deg, rgba(39, 252, 224, 0.26) 2px, transparent 2px);
+        background-size: 72px 72px;
+        filter: drop-shadow(0 0 16px rgba(35, 255, 224, 0.55));
+        opacity: 0.82;
+      }
+
+      .figure {
+        position: absolute;
+        left: 50%;
+        bottom: 210px;
+        width: 342px;
+        height: 690px;
+        transform: translateX(-50%);
+        filter: drop-shadow(-20px 0 28px rgba(42, 255, 224, 0.45)) drop-shadow(24px 0 30px rgba(255, 54, 40, 0.38));
+      }
+
+      .helmet {
+        position: absolute;
+        left: 89px;
+        top: 0;
+        width: 164px;
+        height: 148px;
+        border-radius: 78px 78px 62px 62px;
+        background: linear-gradient(145deg, #e7edf3 0%, #9ba7b3 42%, #1d2431 100%);
+        box-shadow: inset -18px -28px 34px rgba(0, 0, 0, 0.45);
+      }
+
+      .visor {
+        position: absolute;
+        left: 24px;
+        top: 48px;
+        width: 116px;
+        height: 43px;
+        border-radius: 28px;
+        background: linear-gradient(90deg, #071018, #0ef0dc 47%, #ffe3b0 52%, #a90026);
+        box-shadow: 0 0 22px rgba(31, 255, 229, 0.55);
+      }
+
+      .body {
+        position: absolute;
+        left: 58px;
+        top: 132px;
+        width: 226px;
+        height: 376px;
+        border-radius: 92px 92px 38px 38px;
+        background:
+          linear-gradient(90deg, rgba(28, 255, 224, 0.26), transparent 28%, transparent 72%, rgba(255, 54, 42, 0.22)),
+          linear-gradient(180deg, #2e3745, #0c111b);
+      }
+
+      .arm-left,
+      .arm-right {
+        position: absolute;
+        top: 186px;
+        width: 70px;
+        height: 310px;
+        border-radius: 44px;
+        background: linear-gradient(180deg, #202735, #07090f);
+      }
+
+      .arm-left {
+        left: 8px;
+        transform: rotate(11deg);
+      }
+
+      .arm-right {
+        right: 8px;
+        transform: rotate(-11deg);
+      }
+
+      .leg-left,
+      .leg-right {
+        position: absolute;
+        top: 482px;
+        width: 82px;
+        height: 220px;
+        border-radius: 38px 38px 18px 18px;
+        background: linear-gradient(180deg, #151b26, #05070b);
+      }
+
+      .leg-left {
+        left: 76px;
+      }
+
+      .leg-right {
+        right: 76px;
+      }
+
+      .title {
+        position: absolute;
+        left: 72px;
+        right: 72px;
+        top: 64px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        letter-spacing: 0.16em;
+      }
+
+      .title strong {
+        font-size: 72px;
+        line-height: 0.88;
+        font-weight: 900;
+        text-transform: uppercase;
+      }
+
+      .title span {
+        margin-top: 10px;
+        color: #2effe6;
+        font-size: 18px;
+        font-weight: 800;
+        text-align: right;
+      }
+
+      .caption {
+        position: absolute;
+        left: 78px;
+        right: 78px;
+        bottom: 62px;
+        display: flex;
+        justify-content: space-between;
+        color: #e7ecf3;
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="poster">
+      <div class="title">
+        <strong>Moon<br>Rally</strong>
+        <span>REDLINE<br>2049</span>
+      </div>
+      <div class="grid"></div>
+      <div class="figure" aria-label="astronaut racer">
+        <div class="helmet">
+          <div class="visor"></div>
+        </div>
+        <div class="body"></div>
+        <div class="arm-left"></div>
+        <div class="arm-right"></div>
+        <div class="leg-left"></div>
+        <div class="leg-right"></div>
+      </div>
+      <div class="caption">
+        <span>solar dust</span>
+        <span>neon circuit</span>
+      </div>
+    </main>
+  </body>
+</html>

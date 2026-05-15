@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>内容脚本 UI 测试</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: #101318;
+        color: #f4f6f8;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: minmax(280px, 420px) 1fr;
+        gap: 32px;
+        align-items: center;
+        width: min(980px, calc(100vw - 48px));
+        min-height: 100vh;
+        margin: 0 auto;
+      }
+
+      img {
+        width: 100%;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        box-shadow: 0 28px 70px rgba(0, 0, 0, 0.35);
+      }
+
+      h1 {
+        margin: 0 0 14px;
+        font-size: 28px;
+      }
+
+      p {
+        margin: 0;
+        color: #c6ccd5;
+        font-size: 15px;
+        line-height: 1.7;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="./sample-card.png" alt="Moon Rally neon poster">
+      <section>
+        <h1>内容脚本 UI 测试</h1>
+        <p>这个页面模拟扩展后台发来的分析结果，用真实 content.js 渲染结果浮窗。</p>
+      </section>
+    </main>
+    <script>
+      const listeners = [];
+      window.chrome = {
+        runtime: {
+          onMessage: {
+            addListener(listener) {
+              listeners.push(listener);
+            }
+          },
+          async sendMessage(message) {
+            if (message.type === "RIPT_REWRITE_JSON_PROMPT") {
+              return {
+                ok: true,
+                json: message.currentJson
+              };
+            }
+            return { ok: true };
+          }
+        }
+      };
+
+      window.dispatchRiptMessage = (message) => {
+        for (const listener of listeners) {
+          listener(message, {}, () => {});
+        }
+      };
+    </script>
+    <script src="../../content.js?v=2"></script>
+    <script>
+      fetch("../results/kimi-style-transfer-result.json")
+        .then((response) => response.text())
+        .then((json) => {
+          window.dispatchRiptMessage({
+            type: "RIPT_SHOW_RESULT",
+            result: { json },
+            point: { x: window.innerWidth / 2, y: 160 }
+          });
+        })
+        .catch((error) => {
+          window.dispatchRiptMessage({
+            type: "RIPT_SHOW_ERROR",
+            message: error.message,
+            point: { x: window.innerWidth / 2, y: 160 }
+          });
+        });
+    </script>
+  </body>
+</html>
