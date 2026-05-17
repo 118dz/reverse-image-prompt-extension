@@ -165,27 +165,51 @@
     const root = ensureShadow();
     root.querySelector(".ript-panel")?.remove();
 
-    const promptText = String(result?.prompt || result?.raw || "").trim();
+    const styleText = String(result?.styleKit?.stylePrompt || result?.prompt || result?.raw || "").trim();
+    const templateText = String(result?.styleKit?.promptTemplate || result?.template || `{{subject}}，${styleText}`).trim();
 
     const panel = createShell(point, `
       <section class="ript-card ript-result-card">
         <div class="ript-head ript-drag-handle">
           <header class="ript-result-header">
-            <h2>风格提示词</h2>
-            <p>只保留可迁移的画面韵味</p>
+            <h2>画面语法</h2>
+            <p>输入新主体后生成完整提示词</p>
           </header>
           <button class="ript-close" type="button" aria-label="关闭">×</button>
         </div>
-        <textarea class="ript-result-text" data-ript-active-text spellcheck="false">${escapeHtml(promptText)}</textarea>
+
+        <label class="ript-output-field">
+          <span>风格语法</span>
+          <textarea class="ript-result-text ript-style-text" data-ript-style-text spellcheck="false">${escapeHtml(styleText)}</textarea>
+        </label>
+
+        <label class="ript-output-field">
+          <span>主体放置模板</span>
+          <textarea class="ript-result-text ript-template-text" data-ript-template-text spellcheck="false">${escapeHtml(templateText)}</textarea>
+        </label>
+
+        <label class="ript-input-field ript-subject-field">
+          <span>新主体</span>
+          <input data-ript-subject type="text" autocomplete="off" placeholder="例如：一只复古机械手表">
+        </label>
+        <button class="ript-primary" type="button" data-ript-generate-final>生成完整提示词</button>
+        <p class="ript-status" data-ript-status></p>
+
+        <label class="ript-output-field">
+          <span>完整提示词</span>
+          <textarea class="ript-result-text ript-final-text" data-ript-final-text spellcheck="false" placeholder="输入新主体后生成"></textarea>
+        </label>
+
         <footer class="ript-result-footer">
-          <button class="ript-copy-main" type="button" data-ript-copy-prompt>复制风格提示词</button>
+          <button class="ript-secondary" type="button" data-ript-copy-template>复制模板</button>
+          <button class="ript-copy-main" type="button" data-ript-copy-final>复制完整提示词</button>
         </footer>
       </section>
     `);
 
     root.appendChild(panel);
     bindClose(root);
-    bindResultControls(root);
+    bindResultControls(root, result);
     bindDrag(root);
   }
 
@@ -254,16 +278,71 @@
     handle.addEventListener("pointercancel", stopDrag);
   }
 
-  function bindResultControls(root) {
-    const textarea = root.querySelector("[data-ript-active-text]");
+  function bindResultControls(root, result) {
+    const styleTextarea = root.querySelector("[data-ript-style-text]");
+    const templateTextarea = root.querySelector("[data-ript-template-text]");
+    const finalTextarea = root.querySelector("[data-ript-final-text]");
+    const subjectInput = root.querySelector("[data-ript-subject]");
+    const generateButton = root.querySelector("[data-ript-generate-final]");
+    const status = root.querySelector("[data-ript-status]");
 
     bindCopyButton({
       root,
-      textarea,
-      selector: "[data-ript-copy-prompt]",
-      getValue: () => textarea.value,
-      idleLabel: "复制风格提示词",
+      textarea: templateTextarea,
+      selector: "[data-ript-copy-template]",
+      getValue: () => templateTextarea.value,
+      idleLabel: "复制模板",
       doneLabel: "✓ 已复制"
+    });
+
+    bindCopyButton({
+      root,
+      textarea: finalTextarea,
+      selector: "[data-ript-copy-final]",
+      getValue: () => finalTextarea.value,
+      idleLabel: "复制完整提示词",
+      doneLabel: "✓ 已复制"
+    });
+
+    generateButton?.addEventListener("click", async () => {
+      const subject = subjectInput.value.trim();
+      if (!subject) {
+        setInlineStatus(status, "先输入你想生成的新主体。", true);
+        subjectInput.focus();
+        return;
+      }
+
+      generateButton.disabled = true;
+      generateButton.classList.add("is-loading");
+      generateButton.textContent = "生成中...";
+      finalTextarea.disabled = true;
+      setInlineStatus(status, "正在把新主体嵌进画面语法。");
+
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "RIPT_ADAPT_SUBJECT",
+          subject,
+          styleKit: {
+            ...(result?.styleKit || {}),
+            stylePrompt: styleTextarea.value.trim(),
+            promptTemplate: templateTextarea.value.trim()
+          }
+        });
+
+        if (!response?.ok) {
+          throw new Error(response?.message || "生成失败，请稍后重试。");
+        }
+
+        finalTextarea.value = response.prompt || "";
+        setInlineStatus(status, "完整提示词已生成。");
+      } catch (error) {
+        setInlineStatus(status, error?.message || "生成失败，请稍后重试。", true);
+      } finally {
+        generateButton.disabled = false;
+        generateButton.classList.remove("is-loading");
+        generateButton.textContent = "生成完整提示词";
+        finalTextarea.disabled = false;
+      }
     });
   }
 
@@ -272,7 +351,9 @@
       const button = event.currentTarget;
       button.disabled = true;
       try {
-        await copyText(getValue(), textarea);
+        const value = String(getValue() || "").trim();
+        if (!value) throw new Error("没有可复制内容");
+        await copyText(value, textarea);
         showToast(root, "已复制到剪贴板");
         button.textContent = doneLabel;
         window.setTimeout(() => {
@@ -290,6 +371,12 @@
         }, 2200);
       }
     });
+  }
+
+  function setInlineStatus(status, message, isError = false) {
+    if (!status) return;
+    status.textContent = message;
+    status.dataset.state = isError ? "error" : "ok";
   }
 
   function showToast(root, message, isError = false) {
@@ -371,7 +458,7 @@
 
   function getPanelPosition(point) {
     const width = Math.min(520, window.innerWidth - 24);
-    const estimatedHeight = 620;
+    const estimatedHeight = Math.min(720, window.innerHeight - 24);
     return {
       left: Math.max(12, Math.round((window.innerWidth - width) / 2)),
       top: Math.max(12, Math.round((window.innerHeight - estimatedHeight) / 2))
@@ -656,7 +743,8 @@
       }
 
       .ript-primary,
-      .ript-copy-main {
+      .ript-copy-main,
+      .ript-secondary {
         position: relative;
         display: inline-flex;
         align-items: center;
@@ -684,7 +772,20 @@
         transform: translateY(-1px);
       }
 
-      .ript-primary:disabled {
+      .ript-secondary {
+        border-color: rgba(255, 255, 255, 0.16);
+        color: #e5e7eb;
+        background: rgba(31, 41, 55, 0.72);
+      }
+
+      .ript-secondary:hover {
+        background: rgba(75, 85, 99, 0.9);
+        transform: translateY(-1px);
+      }
+
+      .ript-primary:disabled,
+      .ript-copy-main:disabled,
+      .ript-secondary:disabled {
         cursor: wait;
         opacity: 0.72;
         transform: none;
@@ -770,7 +871,7 @@
         display: flex;
         flex-direction: column;
         padding: 22px 22px 0;
-        overflow: hidden;
+        overflow: auto;
       }
 
       .ript-result-header {
@@ -790,11 +891,24 @@
         text-align: left;
       }
 
+      .ript-output-field {
+        display: block;
+        margin-top: 14px;
+      }
+
+      .ript-output-field span {
+        display: block;
+        margin-bottom: 7px;
+        color: #e5e7eb;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
       .ript-result-text {
         display: block;
-        width: calc(100% - 40px);
-        min-height: 260px;
-        margin: 20px;
+        width: 100%;
+        min-height: 112px;
+        margin: 0;
         resize: vertical;
         border: 1px solid rgba(255, 255, 255, 0.16);
         border-radius: 18px;
@@ -807,11 +921,29 @@
         transition: border-color 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
       }
 
+      .ript-style-text {
+        min-height: 104px;
+      }
+
+      .ript-template-text {
+        min-height: 92px;
+      }
+
+      .ript-final-text {
+        min-height: 148px;
+      }
+
+      .ript-subject-field {
+        margin-top: 14px;
+      }
+
       .ript-result-footer {
         position: sticky;
         bottom: 0;
         z-index: 1;
-        display: block;
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: 10px;
         margin: 0 -22px;
         padding: 12px 42px 20px;
         background: linear-gradient(180deg, rgba(17, 24, 39, 0), rgba(17, 24, 39, 0.94) 34%, rgba(17, 24, 39, 0.99));
@@ -820,6 +952,11 @@
       }
 
       .ript-copy-main {
+        width: 100%;
+        min-height: 42px;
+      }
+
+      .ript-secondary {
         width: 100%;
         min-height: 42px;
       }
@@ -874,6 +1011,11 @@
       }
 
       @media (max-width: 520px) {
+        .ript-result-footer {
+          grid-template-columns: 1fr;
+          padding: 12px 22px 18px;
+        }
+
         .ript-copy-main {
           min-height: 42px;
         }

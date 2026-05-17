@@ -12,6 +12,7 @@ const CONNECTION_TEST_TIMEOUT_MS = 20000;
 const IMAGE_FETCH_TIMEOUT_MS = 20000;
 const IMAGE_ANALYSIS_TIMEOUT_MS = 45000;
 const IMAGE_ANALYSIS_WATCHDOG_MS = 50000;
+const SUBJECT_ADAPTATION_TIMEOUT_MS = 30000;
 const ANALYSIS_MAX_TOKENS = 500;
 
 chrome.runtime.onInstalled.addListener(setupContextMenu);
@@ -42,16 +43,29 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type !== "RIPT_TEST_SAVE_BINDING") return false;
+  if (message?.type === "RIPT_TEST_SAVE_BINDING") {
+    handleBindingMessage(message, sender)
+      .then((response) => sendResponse(response))
+      .catch((error) => sendResponse({
+        ok: false,
+        message: normalizeError(error)
+      }));
 
-  handleBindingMessage(message, sender)
-    .then((response) => sendResponse(response))
-    .catch((error) => sendResponse({
-      ok: false,
-      message: normalizeError(error)
-    }));
+    return true;
+  }
 
-  return true;
+  if (message?.type === "RIPT_ADAPT_SUBJECT") {
+    handleSubjectAdaptationMessage(message)
+      .then((response) => sendResponse(response))
+      .catch((error) => sendResponse({
+        ok: false,
+        message: normalizeError(error)
+      }));
+
+    return true;
+  }
+
+  return false;
 });
 
 async function startReverseImageFlow({ tabId, srcUrl, point }) {
@@ -107,6 +121,43 @@ async function handleBindingMessage(message, sender) {
   return {
     ok: true,
     message: "检测成功，绑定已保存。请回到网页右键图片开始分析。"
+  };
+}
+
+async function handleSubjectAdaptationMessage(message) {
+  const subject = String(message.subject || "").trim();
+  if (!subject) {
+    throw new Error("请先输入你想生成的新主体。");
+  }
+
+  const settings = await chrome.storage.local.get([
+    STORAGE_KEYS.apiKey,
+    STORAGE_KEYS.apiUrl,
+    STORAGE_KEYS.model
+  ]);
+
+  const apiKey = settings[STORAGE_KEYS.apiKey];
+  const apiUrl = settings[STORAGE_KEYS.apiUrl];
+  const model = settings[STORAGE_KEYS.model] || DEFAULT_MODEL;
+  if (!apiKey || !apiUrl || !model) {
+    throw new Error("请先在扩展弹窗中绑定 API URL、API Key 和模型名称。");
+  }
+
+  const prompt = await withTimeout(
+    adaptSubjectPrompt({
+      apiKey,
+      apiUrl,
+      model,
+      subject,
+      styleKit: message.styleKit || {}
+    }),
+    SUBJECT_ADAPTATION_TIMEOUT_MS,
+    "主体适配超过 30 秒，已自动停止。请稍后重试，或先复制模板手动改写。"
+  );
+
+  return {
+    ok: true,
+    prompt
   };
 }
 
@@ -305,6 +356,41 @@ async function reverseImagePrompt({ apiKey, apiUrl, model, imageDataUrl }) {
   });
 }
 
+async function adaptSubjectPrompt({ apiKey, apiUrl, model, subject, styleKit }) {
+  const endpoint = normalizeApiUrl(apiUrl);
+  const chatEndpoint = endpoint.includes("/chat/completions")
+    ? endpoint
+    : endpoint.replace(/\/responses\/?$/, "/chat/completions");
+
+  const response = await fetchWithTimeout(chatEndpoint, {
+    method: "POST",
+    headers: getHeaders(apiKey),
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: "system",
+          content: "你是生图提示词导演。你会把用户的新主体嵌入参考图的画面语法，只输出一段中文生图提示词，不要解释。"
+        },
+        {
+          role: "user",
+          content: getSubjectAdaptationPrompt({ subject, styleKit })
+        }
+      ],
+      ...getModelSpecificOptions(model),
+      max_tokens: ANALYSIS_MAX_TOKENS
+    })
+  }, SUBJECT_ADAPTATION_TIMEOUT_MS);
+
+  const payload = await parseJsonResponse(response);
+  const text = payload?.choices?.[0]?.message?.content || "";
+  const prompt = cleanupPromptText(text);
+  if (!prompt) {
+    throw new Error("AI 没有返回可用的完整提示词。");
+  }
+  return prompt;
+}
+
 async function testResponses({ apiKey, endpoint, model }) {
   const response = await fetchWithTimeout(endpoint, {
     method: "POST",
@@ -459,7 +545,7 @@ async function callChatCompletions({ apiKey, endpoint, model, imageDataUrl }) {
       messages: [
         {
           role: "system",
-          content: "你是图像风格提示词提炼助手。只输出一段中文风格提示词，不要 JSON，不要解释。"
+          content: "你是图像画面语法提炼助手。只输出符合要求的 JSON，不要解释。"
         },
         {
           role: "user",
@@ -551,22 +637,38 @@ async function parseJsonResponse(response) {
 
 function getPromptText() {
   return [
-    "观察参考图，只输出一段中文风格提示词，供用户粘贴到其他生图模型里复用这张图的画面韵味。",
-    "不要生成 JSON、Markdown、标题、分点、解释、负面提示词或参数建议。",
-    "不要写“替换为主体”这类占位符；用户会自己在前面加主体，你只负责风格层。",
-    "不要 100% 复刻原图，不要写具体 logo、品牌名、电影片名、明星名、准确文字或演职员表。",
-    "如果原图含文字/logo，只抽象为“预留文字区”“大面积留白”“标识留白”等版面描述。",
-    "提示词只描述可迁移风格：构图、光影、色彩比例、材质颗粒、时代气质、情绪氛围、画面节奏。",
-    "如果图片信息不足，请写“无法确认”，不要编造。",
-    "长度控制在 120-180 个中文字符，必须是一整段，可直接复制。"
+    "观察参考图，提取可迁移的画面语法。目标不是复刻原图，而是让用户把一个新主体放进相近的画面风格里。",
+    "只返回 JSON，不要 Markdown，不要解释，不要代码块。",
+    "JSON 字段必须是：stylePrompt、promptTemplate、composition、lighting、color、texture、mood、avoid。",
+    "stylePrompt：80-140 个中文字符，只描述可迁移风格，不写原图具体主体。",
+    "promptTemplate：120-200 个中文字符，必须且只出现一次 {{subject}}，描述新主体应如何进入构图、空间和光影。",
+    "composition、lighting、color、texture、mood：每项 10-28 个中文字符。",
+    "avoid：一句话说明迁移时应避免复刻的内容，例如具体人物、logo、文字、品牌、电影名。",
+    "不要写具体 logo、品牌名、电影片名、明星名、准确文字或演职员表；原图文字/logo 只抽象成版面留白或标识留白。",
+    "如果图片信息不足，stylePrompt 写“无法确认”，promptTemplate 写“{{subject}}，无法确认参考图风格”。"
+  ].join("\n");
+}
+
+function getSubjectAdaptationPrompt({ subject, styleKit }) {
+  return [
+    `新主体：${subject}`,
+    "参考图画面语法如下：",
+    JSON.stringify(normalizeStyleKit(styleKit), null, 2),
+    "请生成一段可直接粘贴到生图模型里的中文提示词。",
+    "要求：",
+    "1. 不要复刻参考图的具体主体、人物身份、logo、文字、品牌或电影名。",
+    "2. 不要机械替换 {{subject}}；要让新主体自然进入构图、空间、光影和材质。",
+    "3. 如果新主体与原风格冲突，优先调整主体姿态、场景和光线，让它成立。",
+    "4. 输出 120-220 个中文字符，一整段，不要标题、分点、JSON、Markdown、参数或解释。"
   ].join("\n");
 }
 
 function cleanupPromptText(text) {
   const trimmed = String(text || "").trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const fenced = trimmed.match(/```(?:json|text)?\s*([\s\S]*?)```/i);
   return (fenced?.[1] || trimmed)
     .replace(/^【?风格提示词】?[：:]\s*/i, "")
+    .replace(/^完整提示词[：:]\s*/i, "")
     .replace(/^风格提示词[：:]\s*/i, "")
     .replace(/^["'“”]+|["'“”]+$/g, "")
     .trim();
@@ -592,15 +694,79 @@ function parseAIResponse(text) {
     throw new Error("AI 没有返回可解析内容。");
   }
 
-  const prompt = cleanupPromptText(text);
-  if (!prompt) {
+  const styleKit = parseStyleKit(text);
+  if (!styleKit.stylePrompt) {
     throw new Error("AI 没有返回可用的风格提示词。");
   }
 
   return {
-    prompt,
+    prompt: styleKit.stylePrompt,
+    template: styleKit.promptTemplate,
+    styleKit,
     raw: text
   };
+}
+
+function parseStyleKit(text) {
+  const fallbackPrompt = cleanupPromptText(text);
+  const parsed = parseJsonObject(text);
+  if (!parsed) {
+    return normalizeStyleKit({
+      stylePrompt: fallbackPrompt,
+      promptTemplate: `{{subject}}，${fallbackPrompt}`
+    });
+  }
+
+  return normalizeStyleKit(parsed);
+}
+
+function parseJsonObject(text) {
+  const cleaned = cleanupPromptText(text);
+  const direct = tryParseJson(cleaned);
+  if (direct) return direct;
+
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  return tryParseJson(cleaned.slice(start, end + 1));
+}
+
+function tryParseJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStyleKit(value) {
+  const kit = value && typeof value === "object" ? value : {};
+  const stylePrompt = cleanOneLine(kit.stylePrompt || kit.prompt || kit.raw || "");
+  const promptTemplate = ensureTemplate(cleanOneLine(kit.promptTemplate || kit.template || ""), stylePrompt);
+  return {
+    stylePrompt,
+    promptTemplate,
+    composition: cleanOneLine(kit.composition || ""),
+    lighting: cleanOneLine(kit.lighting || ""),
+    color: cleanOneLine(kit.color || ""),
+    texture: cleanOneLine(kit.texture || ""),
+    mood: cleanOneLine(kit.mood || ""),
+    avoid: cleanOneLine(kit.avoid || "")
+  };
+}
+
+function cleanOneLine(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function ensureTemplate(template, stylePrompt) {
+  let normalized = template || `{{subject}}，${stylePrompt}`;
+  if (!normalized.includes("{{subject}}")) {
+    normalized = `{{subject}}，${normalized}`;
+  }
+  return normalized;
 }
 
 function normalizeError(error) {
