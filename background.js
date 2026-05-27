@@ -8,6 +8,7 @@ const STORAGE_KEYS = {
 
 const DEFAULT_API_URL = "https://api.moonshot.cn/v1/chat/completions";
 const DEFAULT_MODEL = "kimi-k2.6";
+const DEFAULT_PROVIDER = "kimi";
 const CONNECTION_TEST_TIMEOUT_MS = 20000;
 const IMAGE_FETCH_TIMEOUT_MS = 20000;
 const IMAGE_ANALYSIS_TIMEOUT_MS = 45000;
@@ -72,12 +73,14 @@ async function startReverseImageFlow({ tabId, srcUrl, point }) {
   const settings = await chrome.storage.local.get([
     STORAGE_KEYS.apiKey,
     STORAGE_KEYS.apiUrl,
-    STORAGE_KEYS.model
+    STORAGE_KEYS.model,
+    STORAGE_KEYS.provider
   ]);
 
   const apiKey = settings[STORAGE_KEYS.apiKey];
   const apiUrl = settings[STORAGE_KEYS.apiUrl];
   const model = settings[STORAGE_KEYS.model] || DEFAULT_MODEL;
+  const provider = normalizeProvider(settings[STORAGE_KEYS.provider] || inferProvider(apiUrl) || DEFAULT_PROVIDER);
 
   if (!apiKey || !apiUrl || !model) {
     await sendToTab(tabId, {
@@ -93,7 +96,8 @@ async function startReverseImageFlow({ tabId, srcUrl, point }) {
     point,
     apiKey,
     apiUrl,
-    model
+    model,
+    provider
   });
 }
 
@@ -105,18 +109,19 @@ async function handleBindingMessage(message, sender) {
   const apiUrl = String(message.apiUrl || "").trim();
   const apiKey = String(message.apiKey || "").trim();
   const model = String(message.model || DEFAULT_MODEL).trim();
+  const provider = normalizeProvider(message.provider || inferProvider(apiUrl) || DEFAULT_PROVIDER);
   if (!apiUrl || !apiKey || !model) {
     throw new Error("API URL、API Key 和模型名称都需要填写。");
   }
 
-  const workingEndpoint = await testApiConnection({ apiKey, apiUrl, model });
+  const workingEndpoint = await testApiConnection({ apiKey, apiUrl, model, provider });
 
   await chrome.storage.local.set({
     [STORAGE_KEYS.apiUrl]: workingEndpoint,
     [STORAGE_KEYS.apiKey]: apiKey,
-    [STORAGE_KEYS.model]: model
+    [STORAGE_KEYS.model]: model,
+    [STORAGE_KEYS.provider]: provider
   });
-  await chrome.storage.local.remove(STORAGE_KEYS.provider);
 
   return {
     ok: true,
@@ -133,12 +138,14 @@ async function handleSubjectAdaptationMessage(message) {
   const settings = await chrome.storage.local.get([
     STORAGE_KEYS.apiKey,
     STORAGE_KEYS.apiUrl,
-    STORAGE_KEYS.model
+    STORAGE_KEYS.model,
+    STORAGE_KEYS.provider
   ]);
 
   const apiKey = settings[STORAGE_KEYS.apiKey];
   const apiUrl = settings[STORAGE_KEYS.apiUrl];
   const model = settings[STORAGE_KEYS.model] || DEFAULT_MODEL;
+  const provider = normalizeProvider(settings[STORAGE_KEYS.provider] || inferProvider(apiUrl) || DEFAULT_PROVIDER);
   if (!apiKey || !apiUrl || !model) {
     throw new Error("请先在扩展弹窗中绑定 API URL、API Key 和模型名称。");
   }
@@ -148,6 +155,7 @@ async function handleSubjectAdaptationMessage(message) {
       apiKey,
       apiUrl,
       model,
+      provider,
       subject,
       styleKit: message.styleKit || {}
     }),
@@ -161,7 +169,13 @@ async function handleSubjectAdaptationMessage(message) {
   };
 }
 
-async function testApiConnection({ apiKey, apiUrl, model }) {
+async function testApiConnection({ apiKey, apiUrl, model, provider }) {
+  if (provider === "gemini") {
+    const endpoint = normalizeGeminiApiUrl(apiUrl);
+    await testGeminiGenerateContent({ apiKey, endpoint, model });
+    return endpoint;
+  }
+
   const endpoint = normalizeApiUrl(apiUrl);
   const resolved = await resolveWorkingEndpoint({ apiKey, endpoint, model, imageDataUrl: null, testOnly: true });
   return resolved.endpoint;
@@ -209,7 +223,7 @@ async function resolveWorkingEndpoint({ apiKey, endpoint, model, imageDataUrl, t
   throw lastError || new Error("API URL 不存在，请检查接口路径。");
 }
 
-async function analyzeImage({ tabId, srcUrl, point, apiKey, apiUrl, model }) {
+async function analyzeImage({ tabId, srcUrl, point, apiKey, apiUrl, model, provider }) {
   await sendProgress(tabId, point, 8, "准备读取图片");
   try {
     await sendProgress(tabId, point, 22, "正在转换图片");
@@ -221,7 +235,8 @@ async function analyzeImage({ tabId, srcUrl, point, apiKey, apiUrl, model }) {
         apiKey,
         apiUrl,
         model,
-        imageDataUrl
+        imageDataUrl,
+        provider
       }),
       IMAGE_ANALYSIS_WATCHDOG_MS,
       "AI 生成超过 50 秒，已自动停止。建议换较小图片、稍后重试，或在弹窗里换更快的视觉模型。"
@@ -343,7 +358,16 @@ async function blobToBase64(blob) {
   return btoa(binary);
 }
 
-async function reverseImagePrompt({ apiKey, apiUrl, model, imageDataUrl }) {
+async function reverseImagePrompt({ apiKey, apiUrl, model, imageDataUrl, provider }) {
+  if (provider === "gemini") {
+    return callGeminiGenerateContent({
+      apiKey,
+      endpoint: normalizeGeminiApiUrl(apiUrl),
+      model,
+      imageDataUrl
+    });
+  }
+
   const endpoint = normalizeApiUrl(apiUrl);
   const chatEndpoint = endpoint.includes("/chat/completions")
     ? endpoint
@@ -356,7 +380,23 @@ async function reverseImagePrompt({ apiKey, apiUrl, model, imageDataUrl }) {
   });
 }
 
-async function adaptSubjectPrompt({ apiKey, apiUrl, model, subject, styleKit }) {
+async function adaptSubjectPrompt({ apiKey, apiUrl, model, provider, subject, styleKit }) {
+  if (provider === "gemini") {
+    const text = await callGeminiTextCompletion({
+      apiKey,
+      endpoint: normalizeGeminiApiUrl(apiUrl),
+      model,
+      prompt: getSubjectAdaptationPrompt({ subject, styleKit }),
+      maxOutputTokens: ANALYSIS_MAX_TOKENS,
+      timeoutMs: SUBJECT_ADAPTATION_TIMEOUT_MS
+    });
+    const prompt = cleanupPromptText(text);
+    if (!prompt) {
+      throw new Error("AI 没有返回可用的完整提示词。");
+    }
+    return prompt;
+  }
+
   const endpoint = normalizeApiUrl(apiUrl);
   const chatEndpoint = endpoint.includes("/chat/completions")
     ? endpoint
@@ -434,6 +474,29 @@ async function testChatCompletions({ apiKey, endpoint, model }) {
   await parseJsonResponse(response);
 }
 
+async function testGeminiGenerateContent({ apiKey, endpoint, model }) {
+  const response = await fetchWithTimeout(buildGeminiGenerateContentUrl(endpoint, model), {
+    method: "POST",
+    headers: getGeminiHeaders(apiKey),
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            {
+              text: "连接测试。请只回复 OK。"
+            }
+          ]
+        }
+      ],
+      generationConfig: {
+        maxOutputTokens: 16
+      }
+    })
+  }, CONNECTION_TEST_TIMEOUT_MS);
+
+  await parseJsonResponse(response);
+}
+
 function normalizeApiUrl(value) {
   const trimmed = String(value || "").trim();
   if (!trimmed) {
@@ -457,6 +520,45 @@ function normalizeApiUrl(value) {
     url.pathname = isOfficialOpenAIEndpoint(url.toString()) ? "/v1/responses" : "/v1/chat/completions";
   }
 
+  return url.toString();
+}
+
+function normalizeGeminiApiUrl(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    throw new Error("请先填写 API URL。");
+  }
+
+  let url;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error("Gemini API URL 格式不正确，请填写完整的 https:// 地址。");
+  }
+
+  if (url.protocol !== "https:") {
+    throw new Error("Gemini API URL 需要是 https:// 地址。");
+  }
+
+  url.hash = "";
+  url.search = "";
+  url.pathname = url.pathname.replace(/\/+$/, "") || "/v1beta";
+  return url.toString();
+}
+
+function buildGeminiGenerateContentUrl(endpoint, model) {
+  const url = new URL(endpoint);
+  const modelId = String(model || "").replace(/^models\//, "");
+  if (!modelId) {
+    throw new Error("Gemini 模型名称不能为空。");
+  }
+
+  if (/\/models\/[^/]+:generateContent$/.test(url.pathname)) {
+    return url.toString();
+  }
+
+  const basePath = url.pathname.replace(/\/+$/, "") || "/v1beta";
+  url.pathname = `${basePath}/models/${modelId}:generateContent`;
   return url.toString();
 }
 
@@ -505,6 +607,23 @@ function isOfficialOpenAIEndpoint(endpoint) {
 
 function isEndpointNotFoundError(error) {
   return error?.status === 404 || /HTTP 404|not found|不存在/i.test(error?.message || "");
+}
+
+function normalizeProvider(value) {
+  const provider = String(value || "").toLowerCase();
+  if (["kimi", "mimo", "gemini", "openai", "custom"].includes(provider)) {
+    return provider;
+  }
+  return DEFAULT_PROVIDER;
+}
+
+function inferProvider(apiUrl) {
+  const value = String(apiUrl || "");
+  if (value.includes("moonshot.cn")) return "kimi";
+  if (value.includes("mimo-v2.com")) return "mimo";
+  if (value.includes("generativelanguage.googleapis.com")) return "gemini";
+  if (value.includes("api.openai.com")) return "openai";
+  return "";
 }
 
 async function callResponses({ apiKey, endpoint, model, imageDataUrl }) {
@@ -573,11 +692,89 @@ async function callChatCompletions({ apiKey, endpoint, model, imageDataUrl }) {
   return parseAIResponse(text);
 }
 
+async function callGeminiGenerateContent({ apiKey, endpoint, model, imageDataUrl }) {
+  const imagePart = dataUrlToGeminiInlineData(imageDataUrl);
+  const response = await fetchWithTimeout(buildGeminiGenerateContentUrl(endpoint, model), {
+    method: "POST",
+    headers: getGeminiHeaders(apiKey),
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            {
+              text: getPromptText()
+            },
+            {
+              inline_data: imagePart
+            }
+          ]
+        }
+      ],
+      generationConfig: {
+        maxOutputTokens: ANALYSIS_MAX_TOKENS,
+        temperature: 0.2
+      }
+    })
+  }, IMAGE_ANALYSIS_TIMEOUT_MS);
+
+  const payload = await parseJsonResponse(response);
+  const text = extractGeminiText(payload);
+  return parseAIResponse(text);
+}
+
+async function callGeminiTextCompletion({ apiKey, endpoint, model, prompt, maxOutputTokens, timeoutMs }) {
+  const response = await fetchWithTimeout(buildGeminiGenerateContentUrl(endpoint, model), {
+    method: "POST",
+    headers: getGeminiHeaders(apiKey),
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            {
+              text: prompt
+            }
+          ]
+        }
+      ],
+      generationConfig: {
+        maxOutputTokens,
+        temperature: 0.2
+      }
+    })
+  }, timeoutMs);
+
+  const payload = await parseJsonResponse(response);
+  return extractGeminiText(payload);
+}
+
 function getHeaders(apiKey) {
   return {
     "Content-Type": "application/json",
     "Authorization": `Bearer ${apiKey}`
   };
+}
+
+function getGeminiHeaders(apiKey) {
+  return {
+    "Content-Type": "application/json",
+    "x-goog-api-key": apiKey
+  };
+}
+
+function dataUrlToGeminiInlineData(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:([^;,]+);base64,(.+)$/);
+  if (!match) {
+    throw new Error("Gemini 需要 base64 图片数据。");
+  }
+  return {
+    mime_type: match[1],
+    data: match[2]
+  };
+}
+
+function extractGeminiText(payload) {
+  const parts = payload?.candidates?.[0]?.content?.parts || [];
+  return parts.map((part) => part.text || "").filter(Boolean).join("\n").trim();
 }
 
 function getModelSpecificOptions(model) {

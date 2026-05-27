@@ -11,10 +11,21 @@
       <header class="ript-popup__header">
         <div class="ript-popup__title-row">
           <h1>图片反推提示词</h1>
-          <span class="ript-popup__version">v0.2.0</span>
+          <span class="ript-popup__version">v0.2.1</span>
         </div>
-        <p>绑定 Kimi API 后，右键网页图片提取画面语法，并适配新主体。</p>
+        <p>选择视觉模型服务商，贴 Key 后提取画面语法并适配新主体。</p>
       </header>
+
+      <label class="ript-popup__field">
+        <span>模型服务商</span>
+        <select id="providerName">
+          <option value="kimi">Kimi / Moonshot</option>
+          <option value="mimo">MiMo</option>
+          <option value="gemini">Gemini</option>
+          <option value="openai">ChatGPT / OpenAI</option>
+          <option value="custom">自定义 OpenAI-compatible</option>
+        </select>
+      </label>
 
       <label class="ript-popup__field">
         <span>API URL</span>

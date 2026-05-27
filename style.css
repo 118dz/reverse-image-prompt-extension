@@ -1,13 +1,13 @@
 html {
   width: 344px;
-  min-height: 392px;
+  min-height: 458px;
   margin: 0;
   background: transparent;
 }
 
 .ript-popup-body {
   width: 344px;
-  min-height: 392px;
+  min-height: 458px;
   margin: 0;
   padding: 0;
   overflow: hidden;
@@ -24,7 +24,7 @@ html {
 }
 
 .ript-popup {
-  min-height: 392px;
+  min-height: 458px;
   margin: 0;
   padding: 18px;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -95,7 +95,8 @@ html {
   font-weight: 600;
 }
 
-.ript-popup__field input {
+.ript-popup__field input,
+.ript-popup__field select {
   width: 100%;
   min-height: 40px;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -108,11 +109,16 @@ html {
   transition: border-color 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
 }
 
+.ript-popup__field select {
+  appearance: none;
+}
+
 .ript-popup__field input::placeholder {
   color: #94a3b8;
 }
 
-.ript-popup__field input:focus {
+.ript-popup__field input:focus,
+.ript-popup__field select:focus {
   border-color: #7cff3a;
   box-shadow: 0 0 0 3px rgba(124, 255, 58, 0.12);
 }

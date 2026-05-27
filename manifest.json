@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "图片反推提示词",
-  "description": "右键网页图片，提取画面语法，并把新主体适配成完整生图提示词。",
-  "version": "0.2.0",
+  "description": "选择视觉模型服务商，右键网页图片提取画面语法，并把新主体适配成完整生图提示词。",
+  "version": "0.2.1",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
